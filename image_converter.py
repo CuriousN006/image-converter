@@ -185,14 +185,26 @@ class ImageHandler(FileSystemEventHandler):
     
     def on_created(self, event):
         """새 파일이 생성되면 호출됩니다."""
+        if event.is_directory:
+            return
+        self._process_file(event.src_path)
+    
+    def on_moved(self, event):
+        """파일이 이동/이름 변경되면 호출됩니다.
+        브라우저가 다운로드할 때 임시 파일(.tmp, .crdownload)을
+        최종 파일명으로 변경하는 경우를 처리합니다.
+        """
+        if event.is_directory:
+            return
+        # 이동된 파일의 최종 경로를 처리
+        self._process_file(event.dest_path)
+    
+    def _process_file(self, file_path: str):
+        """이미지 파일을 처리합니다."""
         # 일시정지 상태면 무시
         if app_state.paused:
             return
-            
-        if event.is_directory:
-            return
         
-        file_path = event.src_path
         ext = Path(file_path).suffix.lower()
         
         # 이미지 파일인지 확인 (변환 대상 + 일반 형식 모두)
