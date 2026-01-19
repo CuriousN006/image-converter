@@ -2,3 +2,4 @@ watchdog
 Pillow
 pillow-heif
 pywin32
+pystray

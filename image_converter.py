@@ -9,12 +9,14 @@ D:\\Downloads 폴더를 모니터링하여 WebP, HEIC 등 비일반적인 이미
 - 이미지 형식 변환 (Pillow + pillow-heif)
 - 변환된 이미지 클립보드 복사 (pywin32)
 - 변환 후 원본 삭제
+- 시스템 트레이 아이콘 (pystray)
 """
 
 import os
 import time
 import io
 import logging
+import threading
 from pathlib import Path
 
 from watchdog.observers import Observer
@@ -22,6 +24,7 @@ from watchdog.events import FileSystemEventHandler
 from PIL import Image
 import pillow_heif
 import win32clipboard
+import pystray
 
 # HEIC/HEIF 지원 활성화
 pillow_heif.register_heif_opener()
@@ -52,6 +55,41 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+
+# ===== 전역 상태 =====
+class AppState:
+    """애플리케이션 상태 관리"""
+    def __init__(self):
+        self.paused = False
+        self.observer = None
+        self.tray_icon = None
+        
+app_state = AppState()
+
+
+def create_icon_image(color: str = "green"):
+    """트레이 아이콘 이미지 생성 (녹색=활성, 빨간색=일시정지)"""
+    size = 64
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    
+    # 원 그리기
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(img)
+    
+    if color == "green":
+        fill_color = (76, 175, 80, 255)  # 녹색
+    else:
+        fill_color = (244, 67, 54, 255)  # 빨간색
+    
+    # 외곽선 그리기
+    draw.ellipse([4, 4, size-4, size-4], fill=fill_color, outline=(255, 255, 255, 255), width=2)
+    
+    # 중앙에 이미지 아이콘 모양 (간단한 사각형)
+    margin = 18
+    draw.rectangle([margin, margin, size-margin, size-margin], fill=(255, 255, 255, 200))
+    
+    return img
 
 
 def copy_image_to_clipboard(image_path: str):
@@ -147,6 +185,10 @@ class ImageHandler(FileSystemEventHandler):
     
     def on_created(self, event):
         """새 파일이 생성되면 호출됩니다."""
+        # 일시정지 상태면 무시
+        if app_state.paused:
+            return
+            
         if event.is_directory:
             return
         
@@ -210,8 +252,60 @@ class ImageHandler(FileSystemEventHandler):
             time.sleep(0.5)
 
 
-def main():
-    """메인 함수"""
+# ===== 트레이 메뉴 핸들러 =====
+def on_toggle_pause(icon, item):
+    """일시정지/재개 토글"""
+    app_state.paused = not app_state.paused
+    
+    if app_state.paused:
+        logger.info("⏸️ 일시정지됨")
+        icon.icon = create_icon_image("red")
+    else:
+        logger.info("▶️ 재개됨")
+        icon.icon = create_icon_image("green")
+    
+    # 메뉴 업데이트
+    icon.update_menu()
+
+
+def on_exit(icon, item):
+    """종료"""
+    logger.info("🛑 종료 요청됨...")
+    
+    # 감시자 중지
+    if app_state.observer:
+        app_state.observer.stop()
+    
+    # 트레이 아이콘 제거
+    icon.stop()
+
+
+def get_pause_text(item):
+    """일시정지 메뉴 텍스트"""
+    return "▶️ 재개" if app_state.paused else "⏸️ 일시정지"
+
+
+def run_tray_icon():
+    """시스템 트레이 아이콘 실행"""
+    menu = pystray.Menu(
+        pystray.MenuItem(get_pause_text, on_toggle_pause),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("❌ 종료", on_exit)
+    )
+    
+    icon = pystray.Icon(
+        "ImageConverter",
+        create_icon_image("green"),
+        "이미지 자동 변환",
+        menu
+    )
+    
+    app_state.tray_icon = icon
+    icon.run()
+
+
+def run_observer():
+    """파일 감시자 실행 (별도 스레드)"""
     # 모니터링 폴더 확인
     if not os.path.exists(WATCH_DIR):
         logger.error(f"❌ 폴더가 존재하지 않습니다: {WATCH_DIR}")
@@ -222,6 +316,7 @@ def main():
     logger.info(f"📁 모니터링 폴더: {WATCH_DIR}")
     logger.info(f"📝 변환 대상: {', '.join(sorted(CONVERT_EXTENSIONS))}")
     logger.info(f"📋 클립보드 복사: 모든 이미지 ({', '.join(sorted(SKIP_EXTENSIONS))} 포함)")
+    logger.info("💡 시스템 트레이에서 제어 가능")
     logger.info("=" * 50)
     
     # 감시자 설정
@@ -229,18 +324,28 @@ def main():
     observer = Observer()
     observer.schedule(event_handler, WATCH_DIR, recursive=False)
     
+    app_state.observer = observer
+    
     # 감시 시작
     observer.start()
     
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("🛑 종료 요청됨...")
-        observer.stop()
+        while observer.is_alive():
+            observer.join(timeout=1)
+    except Exception:
+        pass
     
-    observer.join()
-    logger.info("👋 스크립트 종료")
+    logger.info("� 스크립트 종료")
+
+
+def main():
+    """메인 함수"""
+    # 파일 감시자를 별도 스레드에서 실행
+    observer_thread = threading.Thread(target=run_observer, daemon=True)
+    observer_thread.start()
+    
+    # 트레이 아이콘 실행 (메인 스레드에서)
+    run_tray_icon()
 
 
 if __name__ == "__main__":
