@@ -1,6 +1,14 @@
 @echo off
-REM 이미지 자동 변환 스크립트 백그라운드 실행
-REM 가상환경의 pythonw.exe를 사용하여 콘솔 창 없이 실행
+REM Run the image converter in the background using the local project venv.
 
+setlocal
 cd /d "%~dp0"
-start "" "d:\PythonPractice\.venv\Scripts\pythonw.exe" image_converter.py
+set "PYTHONW=%~dp0.venv\Scripts\pythonw.exe"
+
+if not exist "%PYTHONW%" (
+    echo Local virtual environment not found: "%PYTHONW%"
+    echo Create it with: python -m venv .venv
+    exit /b 1
+)
+
+start "" "%PYTHONW%" "%~dp0image_converter.py"

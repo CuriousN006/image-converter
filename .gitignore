@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+image_converter.log
+run_stdout.log
+run_stderr.log
